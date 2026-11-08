@@ -4,6 +4,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
+import { configureApp } from '../src/app.setup.js';
 import type { GardenConfig } from '../src/config/control-api.client.js';
 import type { Rule } from '../src/matching/select-faults.js';
 
@@ -39,6 +40,7 @@ async function startApp(env: Record<string, string>, controlPort: number): Promi
   });
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   const app = moduleRef.createNestApplication({ bodyParser: false });
+  configureApp(app);
   await app.init();
   return app;
 }
@@ -137,6 +139,21 @@ describe('Fault proxy (e2e), private targets allowed', () => {
   it('forwards the bare target URL with no extra path', async () => {
     const res = await http$().get(`/g/${GARDEN}/api`).expect(200);
     expect(res.body.url).toBe('/v1/');
+  });
+
+  it('allows browsers from any origin and exposes the fault header', async () => {
+    const preflight = await http$()
+      .options(`/g/${GARDEN}/api/users`)
+      .set('Origin', 'http://my-app.test')
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'content-type')
+      .expect(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe('*');
+
+    rules = [rule({ id: 'e', type: 'error', params: { status: 503 } })];
+    const res = await http$().get(`/g/${GARDEN}/api/x`).set('Origin', 'http://my-app.test').expect(503);
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+    expect(res.headers['access-control-expose-headers']).toMatch(/x-chaos-fault/i);
   });
 
   it('returns 404 for unknown gardens, targets and malformed ids', async () => {
