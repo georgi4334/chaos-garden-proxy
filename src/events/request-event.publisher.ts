@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import type { Redis } from 'ioredis';
 import { PROXY_CONFIG, type ProxyConfig } from '../config/proxy-config.js';
+import { eventsPublished } from '../observability/proxy-metrics.js';
 import type { RequestEventV1 } from './request-event.js';
 
 export const REDIS_CLIENT = Symbol('REDIS_CLIENT');
@@ -43,7 +44,9 @@ export class RequestEventPublisher implements OnApplicationShutdown {
         'data',
         JSON.stringify(event),
       )
+      .then(() => eventsPublished.inc({ result: 'sent' }))
       .catch((err: Error) => {
+        eventsPublished.inc({ result: 'dropped' });
         this.droppedCount++;
         this.warn(`Dropped request event: ${err.message} (${this.droppedCount} dropped so far)`);
       });
