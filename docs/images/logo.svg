@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" role="img" aria-label="Chaos Garden">
+  <path d="M12 21v-9" stroke="#1f5c39" stroke-width="2" stroke-linecap="round"/>
+  <path d="M12 12c0-4 3-6 7-6 0 4-3 6-7 6Z" fill="#2e7d4f"/>
+  <path d="M12 15c0-3-2-5-6-5 0 3 2 5 6 5Z" fill="#1f5c39"/>
+</svg>
