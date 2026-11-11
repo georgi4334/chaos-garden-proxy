@@ -8,6 +8,7 @@ import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 import type { RequestEventV1 } from '../src/events/request-event.js';
 import { RequestEventPublisher } from '../src/events/request-event.publisher.js';
+import { contractProblems } from './contract.js';
 
 // Needs a real Redis: runs when REDIS_URL is set.
 describe.skipIf(!process.env.REDIS_URL)('Per-garden rate limiting (e2e)', () => {
@@ -85,6 +86,7 @@ describe.skipIf(!process.env.REDIS_URL)('Per-garden rate limiting (e2e)', () => 
     const limited = events.filter((e) => e.faults.includes('rate_limited'));
     expect(limited).toHaveLength(2);
     expect(limited[0]).toMatchObject({ status: 429, faults: ['rate_limited'], gardenId: garden });
+    expect(events.flatMap(contractProblems)).toEqual([]);
   });
 
   it('lets requests through again once tokens refill', async () => {
