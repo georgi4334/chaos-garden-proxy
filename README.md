@@ -62,6 +62,11 @@ After each proxied request the proxy appends one event to a Redis Stream (`chaos
 
 Publishing is fire-and-forget: if Redis is slow or down, events are dropped and counted, and proxying is never delayed. The stream is capped (`EVENT_STREAM_MAXLEN`) so Redis memory stays bounded if the ingest service is stopped. Leave `REDIS_URL` empty to turn events off.
 
+## Docker and CI
+
+- `docker build -t chaos-garden-proxy .` builds a two-stage image (`node:22-bookworm-slim`, production dependencies only, runs as `node`, with a health check). To run the whole system in containers, see `infra/compose.stack.yml` in the Chaos-Garden repo.
+- `.github/workflows/ci.yml` runs lint, build, unit and e2e tests (with a Redis service container, so the rate limiter and event tests run too) on every pull request and on `main`, then builds the image. On `main` it pushes it to `ghcr.io/<owner>/chaos-garden-proxy`.
+
 ## Configuration
 
 | Variable | Default | Meaning |
