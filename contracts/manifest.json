@@ -1,0 +1,27 @@
+{
+  "contract": "request-event",
+  "version": 1,
+  "files": {
+    "fixtures/invalid/completed-missing.json": "054f51d2108dddfdfc4b5b14790eae30e59dec5ef8d036495d4f21216a90dd9a",
+    "fixtures/invalid/date-not-parseable.json": "a30072357374b904487a83e4e058c21aefc7b53f55a6057700a8140b8f6c2b39",
+    "fixtures/invalid/faults-not-strings.json": "89fd386c46fbd87ad21bf4fde485b17fc787ae8640d52b7e6f236b1222a1c811",
+    "fixtures/invalid/garden-id-not-a-uuid.json": "7bdc7148e5bb038000262cd794916420d81987eb2088db6daa7e05a927e52392",
+    "fixtures/invalid/id-not-a-uuid.json": "dc31e2a88dcf22ed59e848b31411ebf3e5ad4c6d04fd93d8d253f833e9fff7fe",
+    "fixtures/invalid/missing-id.json": "842e6915599a803d648442a8f5a4b45173fd2a7ed0998e42d21b850a5b8d2c36",
+    "fixtures/invalid/negative-duration.json": "d4d5bcced11f9fce4889a607106c28f1b1ac2672ac98923713f50dd6c29ff53c",
+    "fixtures/invalid/status-as-string.json": "1d2f1240b113f6415ee222bd31207283853e7b1a353f29ff9c132a3f4b8186c0",
+    "fixtures/invalid/status-out-of-range.json": "ab515719fa946611df8d3daf273d50ed95317aac8784074b8a784a5a5411b4d9",
+    "fixtures/invalid/unsafe-request-id.json": "b3e85e68371157a7e157bb4de4a01da4ef9ea31a32fcf7e8ff0afafe414ad046",
+    "fixtures/invalid/wrong-version.json": "796944e5a1423802131a1ac93173e22580c2dd8088b84a79cfa39d036d712ad3",
+    "fixtures/valid/corrupt-body.json": "f2b9c61546fd2855e92d7aa7bd3acef7e0302b93fc8cc02edd0b87f9cec13d95",
+    "fixtures/valid/dropped-no-response.json": "85c42471f4b416ab1e06fbbb249a01ca63e25efead60874fdb91413b4be9dbeb",
+    "fixtures/valid/injected-error-after-delay.json": "b8830decf4b4953b0885c4c600bffa275faa35200f8205f6424739a1bfb1313f",
+    "fixtures/valid/passthrough.json": "6fba0da0caeb1c4e434a685628602d5875e31c5cff42f98c9756a9f710baf2d5",
+    "fixtures/valid/rate-limited.json": "dca3fd4e4962de69af05e9221fff0497cc5f93de4f01ce93b6448b3f0ce38ebf",
+    "fixtures/valid/target-error.json": "a5b7841b4af2abb2122f0adb8856cefd9a37814e371183e1362d025b656e9480",
+    "fixtures/valid/unknown-extra-property.json": "71b2932fbc7f0b421e07663c5fdd02dbe1fcfe1cfce38b139f0d4a3a6785f825",
+    "fixtures/valid/unknown-fault-value.json": "a25136f28ffa060b37de357fe7834986903ddf0814b755ee98ddede885bd4a87",
+    "fixtures/valid/with-request-id.json": "904bcaf9106d60ef8c67fab291f251aee1fa338d5ec605bbfcba2d47f31cdd56",
+    "request-event.v1.schema.json": "d54fc00f66f2166c1f3b66b20822747d70f9a9d7a24c4760ba09a79b499f554a"
+  }
+}

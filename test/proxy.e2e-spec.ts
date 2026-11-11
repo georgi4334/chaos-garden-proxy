@@ -8,11 +8,15 @@ import { configureApp } from '../src/app.setup.js';
 import type { GardenConfig } from '../src/config/control-api.client.js';
 import type { RequestEventV1 } from '../src/events/request-event.js';
 import { RequestEventPublisher } from '../src/events/request-event.publisher.js';
+import { contractProblems } from './contract.js';
 import type { Rule } from '../src/matching/select-faults.js';
 
 const KEY = 'e2e-internal-key';
 const GARDEN = '11111111-1111-4111-8111-111111111111';
 const PRIVATE_GARDEN = '22222222-2222-4222-8222-222222222222';
+// Target ids are UUIDs, as the control API issues them (the event contract requires it).
+const TARGET_ID = '44444444-4444-4444-8444-444444444444';
+const PRIVATE_TARGET_ID = '55555555-5555-4555-8555-555555555555';
 
 let upstream: http.Server;
 let controlApi: http.Server;
@@ -22,6 +26,8 @@ let controlApiHits = 0;
 let lastControlRequestId: string | undefined;
 /** Events the proxy publishes, captured by a fake publisher. */
 const events: RequestEventV1[] = [];
+/** Every event published during this file, for the contract check at the end. */
+const allEvents: RequestEventV1[] = [];
 
 async function waitFor(check: () => boolean, timeoutMs = 2000) {
   const start = Date.now();
@@ -66,7 +72,12 @@ async function startApp(env: Record<string, string>, controlPort: number): Promi
   });
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(RequestEventPublisher)
-    .useValue({ publish: (event: RequestEventV1) => events.push(event) })
+    .useValue({
+      publish: (event: RequestEventV1) => {
+        events.push(event);
+        allEvents.push(event);
+      },
+    })
     .compile();
   const app = moduleRef.createNestApplication({ bodyParser: false });
   configureApp(app);
@@ -110,12 +121,12 @@ beforeAll(async () => {
     if (gardenId === GARDEN) {
       body = {
         gardenId,
-        targets: [{ id: 't1', name: 'api', baseUrl: `http://127.0.0.1:${upstreamPort}/v1`, rules }],
+        targets: [{ id: TARGET_ID, name: 'api', baseUrl: `http://127.0.0.1:${upstreamPort}/v1`, rules }],
       };
     } else if (gardenId === PRIVATE_GARDEN) {
       body = {
         gardenId,
-        targets: [{ id: 't2', name: 'internal', baseUrl: `http://127.0.0.1:${upstreamPort}`, rules: [] }],
+        targets: [{ id: PRIVATE_TARGET_ID, name: 'internal', baseUrl: `http://127.0.0.1:${upstreamPort}`, rules: [] }],
       };
     }
     if (!body) {
@@ -206,7 +217,7 @@ describe('Fault proxy (e2e), private targets allowed', () => {
     expect(pass).toMatchObject({
       v: 1,
       gardenId: GARDEN,
-      targetId: 't1',
+      targetId: TARGET_ID,
       targetName: 'api',
       method: 'GET',
       path: '/users/7', // query string is never logged
@@ -264,6 +275,12 @@ describe('Fault proxy (e2e), private targets allowed', () => {
     expect(metricValue(text, 'chaos_proxy_config_lookups_total', { result: 'fetched' })).toBeGreaterThan(0);
     expect(metricValue(text, 'chaos_proxy_upstream_seconds_count', { result: 'response' })).toBeGreaterThan(0);
     expect(text).toContain('process_cpu_user_seconds_total');
+  });
+
+  it('every event published so far matches the request-event contract (strictly)', () => {
+    expect(allEvents.length).toBeGreaterThan(5);
+    const problems = allEvents.flatMap((e) => contractProblems(e).map((p) => `${e.faults.join('+') || 'passthrough'}: ${p}`));
+    expect(problems).toEqual([]);
   });
 
   it('returns 404 for unknown gardens, targets and malformed ids', async () => {

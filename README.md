@@ -60,6 +60,8 @@ Prometheus and Grafana (with a ready-made dashboard) are in `infra/` of the Chao
 
 After each proxied request the proxy appends one event to a Redis Stream (`chaos:requests` by default), which the ingest service reads to build request logs and stats. An event holds the garden, target, method, path (without the query string, which can carry secrets), status, duration, the faults applied and the rule ids that fired. Requests to unknown gardens or targets are not logged.
 
+The event format is the **request-event v1 contract**, a JSON Schema owned by the Chaos-Garden repo and copied into `contracts/`. The e2e tests validate every event the proxy publishes against it, strictly (no undocumented properties). `npm run contract:check` (also in CI) fails if the copy was edited or differs from Chaos-Garden's `main`; `npm run contract:sync` updates it. To add a field, change the contract in Chaos-Garden first.
+
 Publishing is fire-and-forget: if Redis is slow or down, events are dropped and counted, and proxying is never delayed. The stream is capped (`EVENT_STREAM_MAXLEN`) so Redis memory stays bounded if the ingest service is stopped. Leave `REDIS_URL` empty to turn events off.
 
 ## Docker and CI

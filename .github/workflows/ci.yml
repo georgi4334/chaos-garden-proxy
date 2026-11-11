@@ -35,6 +35,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --legacy-peer-deps
+      # contracts/ must be unedited and identical to the source in Chaos-Garden (main).
+      - run: npm run contract:check
       - run: npm run lint
       - run: npm run build
       - run: npm test
