@@ -7,6 +7,8 @@ import { ControlApiClient, type TargetConfig } from '../config/control-api.clien
 import { PROXY_CONFIG, RANDOM, type ProxyConfig } from '../config/proxy-config.js';
 import { MAX_EVENT_PATH_LENGTH } from '../events/request-event.js';
 import { RequestEventPublisher } from '../events/request-event.publisher.js';
+import { outcomeOf, proxyRequests, rateLimitDecisions, upstreamDuration } from '../observability/proxy-metrics.js';
+import { currentRequestId } from '../observability/request-context.js';
 import { RateLimiter } from '../rate-limit/rate-limiter.js';
 import { corruptBody } from '../faults/corrupt.js';
 import { selectFaults, type Rule } from '../matching/select-faults.js';
@@ -59,7 +61,10 @@ export class ProxyService {
 
     // Publish one event once the exchange is over, however it ended
     // (response sent, connection dropped, or client gone).
+    const requestId = currentRequestId(); // read now: 'close' may fire outside the request's async context
     res.once('close', () => {
+      const status = res.headersSent ? res.statusCode : null;
+      proxyRequests.inc({ outcome: outcomeOf(applied, status) });
       this.events.publish({
         v: 1,
         id: randomUUID(),
@@ -69,17 +74,19 @@ export class ProxyService {
         targetName: target.name,
         method: req.method,
         path: rest.slice(0, MAX_EVENT_PATH_LENGTH),
-        status: res.headersSent ? res.statusCode : null,
+        status,
         completed: res.writableFinished,
         durationMs: Math.round(performance.now() - started),
         faults: [...applied],
         ruleIds: firedRuleIds,
+        ...(requestId && { requestId }),
       });
     });
 
     // Per-garden rate limit, checked before any fault so refused requests cost nothing upstream.
     const limit = garden.rateLimit ?? this.config.defaultRateLimit;
     const decision = await this.limiter.take(gardenId, limit);
+    rateLimitDecisions.inc({ decision: decision === null ? 'skipped' : decision.allowed ? 'allowed' : 'limited' });
     if (decision) {
       res.setHeader('x-ratelimit-limit', String(limit.rps));
       res.setHeader('x-ratelimit-remaining', String(decision.remaining));
@@ -187,11 +194,14 @@ export class ProxyService {
         lookup: this.lookup,
       });
 
+      const upstreamStart = process.hrtime.bigint();
+      const upstreamSeconds = () => Number(process.hrtime.bigint() - upstreamStart) / 1e9;
       const timer = setTimeout(() => {
         upstream.destroy(new Error('upstream_timeout'));
       }, this.config.upstreamTimeoutMs);
 
       upstream.on('response', (up) => {
+        upstreamDuration.observe({ result: 'response' }, upstreamSeconds());
         const outHeaders = stripHopByHop(up.headers);
         if (faultHeader) outHeaders['x-chaos-fault'] = faultHeader;
         const status = up.statusCode ?? 502;
@@ -229,6 +239,9 @@ export class ProxyService {
       });
 
       upstream.on('error', (err: NodeJS.ErrnoException) => {
+        const result =
+          err instanceof BlockedTargetError ? 'blocked' : err.message === 'upstream_timeout' ? 'timeout' : 'error';
+        if (!res.headersSent) upstreamDuration.observe({ result }, upstreamSeconds());
         if (res.headersSent) {
           res.destroy();
         } else if (err instanceof BlockedTargetError) {

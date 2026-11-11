@@ -5,13 +5,14 @@ import { ControlApiClient } from './config/control-api.client.js';
 import { loadProxyConfig, PROXY_CONFIG, RANDOM, type ProxyConfig } from './config/proxy-config.js';
 import { REDIS_CLIENT, RequestEventPublisher } from './events/request-event.publisher.js';
 import { HealthController } from './health/health.controller.js';
+import { MetricsController } from './observability/metrics.controller.js';
 import { RateLimiter } from './rate-limit/rate-limiter.js';
 import { ProxyController } from './proxy/proxy.controller.js';
 import { ProxyService } from './proxy/proxy.service.js';
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true })],
-  controllers: [HealthController, ProxyController],
+  controllers: [HealthController, MetricsController, ProxyController],
   providers: [
     {
       provide: PROXY_CONFIG,

@@ -24,6 +24,8 @@ export interface RequestEventV1 {
   faults: string[];
   /** Ids of the rules that fired. */
   ruleIds: string[];
+  /** The request's x-request-id, to find it in every service's logs. Optional (added later). */
+  requestId?: string;
 }
 
 export const MAX_EVENT_PATH_LENGTH = 512;

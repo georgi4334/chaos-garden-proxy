@@ -19,6 +19,7 @@ let controlApi: http.Server;
 let upstreamPort: number;
 let rules: Rule[] = [];
 let controlApiHits = 0;
+let lastControlRequestId: string | undefined;
 /** Events the proxy publishes, captured by a fake publisher. */
 const events: RequestEventV1[] = [];
 
@@ -40,6 +41,17 @@ const rule = (over: Partial<Rule> & Pick<Rule, 'id' | 'type'>): Rule => ({
 
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port)));
+}
+
+/** Value of the first sample of `name` whose labels include all of `labels` (label order doesn't matter). */
+function metricValue(text: string, name: string, labels: Record<string, string>): number {
+  for (const line of text.split('\n')) {
+    const m = line.match(/^([a-zA-Z_:][\w:]*)\{(.*)\} (\S+)$/);
+    if (!m || m[1] !== name) continue;
+    const found = Object.fromEntries([...m[2].matchAll(/(\w+)="((?:[^"\\]|\\.)*)"/g)].map((x) => [x[1], x[2]]));
+    if (Object.entries(labels).every(([k, v]) => found[k] === v)) return Number(m[3]);
+  }
+  return Number.NaN;
 }
 
 async function startApp(env: Record<string, string>, controlPort: number): Promise<INestApplication> {
@@ -75,6 +87,7 @@ beforeAll(async () => {
           method: req.method,
           url: req.url,
           host: req.headers.host,
+          requestId: req.headers['x-request-id'],
           body: Buffer.concat(chunks).toString(),
           big: 'x'.repeat(200),
         }),
@@ -86,6 +99,7 @@ beforeAll(async () => {
   // A stub control API that requires the internal key.
   controlApi = http.createServer((req, res) => {
     controlApiHits++;
+    lastControlRequestId = req.headers['x-request-id'] as string | undefined;
     const m = /^\/internal\/gardens\/([^/]+)\/config$/.exec(req.url ?? '');
     if (req.headers['x-internal-key'] !== KEY) {
       res.statusCode = 401;
@@ -209,6 +223,47 @@ describe('Fault proxy (e2e), private targets allowed', () => {
     expect(drop).toMatchObject({ status: null, completed: false, faults: ['latency', 'drop'], ruleIds: ['l1', 'd1'] });
     expect(drop.durationMs).toBeGreaterThanOrEqual(45);
     expect(new Set(events.map((e) => e.id)).size).toBe(3);
+  });
+
+  it('gives every request an id, keeps a valid incoming one, and passes it to every hop', async () => {
+    events.length = 0;
+    const generated = await http$().get(`/g/${GARDEN}/api/a`).expect(200);
+    expect(generated.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+
+    const res = await http$().get(`/g/${GARDEN}/api/b`).set('x-request-id', 'trace-from-the-browser-1').expect(200);
+    expect(res.headers['x-request-id']).toBe('trace-from-the-browser-1');
+    expect(res.body.requestId).toBe('trace-from-the-browser-1'); // the target sees it
+    expect(lastControlRequestId).toBe('trace-from-the-browser-1'); // the control API sees it
+    await waitFor(() => events.length >= 2);
+    expect(events[1].requestId).toBe('trace-from-the-browser-1'); // and it is stored with the logged request
+
+    const unsafe = await http$().get(`/g/${GARDEN}/api/c`).set('x-request-id', 'bad id with spaces').expect(200);
+    expect(unsafe.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('exposes Prometheus metrics: HTTP by route template, proxy outcomes, config lookups', async () => {
+    rules = [rule({ id: 'e', type: 'error', params: { status: 503 } })];
+    await http$().get(`/g/${GARDEN}/api/metrics-check/1`).expect(503);
+    rules = [];
+    await http$().get(`/g/${GARDEN}/api/metrics-check/2`).expect(200);
+
+    const res = await http$().get('/metrics').expect(200);
+    expect(res.headers['content-type']).toMatch(/text\/plain/);
+    const text = res.text;
+    expect(metricValue(text, 'chaos_proxy_requests_total', { outcome: 'error', service: 'proxy' })).toBeGreaterThan(0);
+    expect(metricValue(text, 'chaos_proxy_requests_total', { outcome: 'ok', service: 'proxy' })).toBeGreaterThan(0);
+    // route is the template, never the raw path (bounded label values)
+    expect(
+      metricValue(text, 'http_server_requests_seconds_count', {
+        method: 'GET',
+        route: '/g/:gardenId/:targetName/*path',
+        status_code: '503',
+      }),
+    ).toBeGreaterThan(0);
+    expect(text).not.toContain('metrics-check');
+    expect(metricValue(text, 'chaos_proxy_config_lookups_total', { result: 'fetched' })).toBeGreaterThan(0);
+    expect(metricValue(text, 'chaos_proxy_upstream_seconds_count', { result: 'response' })).toBeGreaterThan(0);
+    expect(text).toContain('process_cpu_user_seconds_total');
   });
 
   it('returns 404 for unknown gardens, targets and malformed ids', async () => {

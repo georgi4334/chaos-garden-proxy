@@ -48,6 +48,14 @@ Each garden has its own limit (set in the dashboard, sent by the control API): a
 
 The bucket lives in Redis and is updated by one Lua script, so the refill and the take are atomic and all proxy instances share one bucket per garden. If Redis is slow (over 250 ms) or down, requests are let through (fail open) and a warning is logged. Needs `REDIS_URL`; turn it off with `RATE_LIMIT_ENABLED=false`.
 
+## Observability
+
+- **Request IDs.** Every request gets an `x-request-id` (a valid incoming one is kept). It is returned to the caller, forwarded to the target and to the control API, and included in the request event, so the same id appears in the proxy's, the control API's and the ingest service's logs.
+- **Logs.** `LOG_FORMAT=json` writes one JSON object per line with the request id; each request also gets an access-log line.
+- **Metrics.** `GET /metrics` (Prometheus): `http_server_requests_seconds` by route template and status, `chaos_proxy_requests_total{outcome}`, `chaos_proxy_rate_limit_decisions_total{decision}`, `chaos_proxy_upstream_seconds{result}`, `chaos_proxy_config_lookups_total{result}`, `chaos_proxy_events_total{result}` (sent or dropped), and Node.js runtime metrics. No label contains a garden id or path. Set `METRICS_TOKEN` to require a bearer token.
+
+Prometheus and Grafana (with a ready-made dashboard) are in `infra/` of the Chaos-Garden repo.
+
 ## Request events
 
 After each proxied request the proxy appends one event to a Redis Stream (`chaos:requests` by default), which the ingest service reads to build request logs and stats. An event holds the garden, target, method, path (without the query string, which can carry secrets), status, duration, the faults applied and the rule ids that fired. Requests to unknown gardens or targets are not logged.
