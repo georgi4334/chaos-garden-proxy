@@ -48,6 +48,8 @@ async function startApp(env: Record<string, string>, controlPort: number): Promi
     INTERNAL_API_KEY: KEY,
     CONFIG_CACHE_TTL_MS: '0',
     UPSTREAM_TIMEOUT_MS: '2000',
+    // This suite is about faults; rate limiting has its own suite (rate-limit.e2e-spec.ts).
+    RATE_LIMIT_ENABLED: 'false',
     ...env,
   });
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })

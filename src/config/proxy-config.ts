@@ -18,6 +18,10 @@ export interface ProxyConfig {
   eventStream: string;
   /** Approximate cap on stream length, so Redis memory stays bounded if ingest is down. */
   eventStreamMaxLen: number;
+  /** Per-garden rate limiting (needs Redis). The garden's own limit comes from the control API. */
+  rateLimitEnabled: boolean;
+  /** Used when the control API does not send a limit for a garden. */
+  defaultRateLimit: { rps: number; burst: number };
 }
 
 export function loadProxyConfig(config: ConfigService): ProxyConfig {
@@ -36,5 +40,7 @@ export function loadProxyConfig(config: ConfigService): ProxyConfig {
     redisUrl: config.get<string>('REDIS_URL') ?? '',
     eventStream: config.get<string>('EVENT_STREAM') ?? 'chaos:requests',
     eventStreamMaxLen: num('EVENT_STREAM_MAXLEN', 100_000),
+    rateLimitEnabled: config.get<string>('RATE_LIMIT_ENABLED') !== 'false',
+    defaultRateLimit: { rps: num('RATE_LIMIT_DEFAULT_RPS', 10) || 10, burst: num('RATE_LIMIT_DEFAULT_BURST', 20) || 20 },
   };
 }
