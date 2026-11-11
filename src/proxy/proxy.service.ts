@@ -1,9 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 import { ControlApiClient, type TargetConfig } from '../config/control-api.client.js';
 import { PROXY_CONFIG, RANDOM, type ProxyConfig } from '../config/proxy-config.js';
+import { MAX_EVENT_PATH_LENGTH } from '../events/request-event.js';
+import { RequestEventPublisher } from '../events/request-event.publisher.js';
 import { corruptBody } from '../faults/corrupt.js';
 import { selectFaults, type Rule } from '../matching/select-faults.js';
 import { assertUrlAllowed, BlockedTargetError, createSafeLookup } from '../security/ssrf.js';
@@ -22,11 +25,14 @@ export class ProxyService {
     private readonly controlApi: ControlApiClient,
     @Inject(PROXY_CONFIG) private readonly config: ProxyConfig,
     @Inject(RANDOM) private readonly random: () => number,
+    private readonly events: RequestEventPublisher,
   ) {
     this.lookup = createSafeLookup(config.allowPrivateTargets);
   }
 
   async handle(req: Request, res: Response): Promise<void> {
+    const startedAt = new Date();
+    const started = performance.now();
     const match = ROUTE_RE.exec(req.originalUrl);
     if (!match || !UUID_RE.test(match[1])) {
       return this.sendError(req, res, 404, 'not_found', 'Unknown garden or route');
@@ -47,15 +53,39 @@ export class ProxyService {
 
     const selection = selectFaults(target.rules, { method: req.method, path: rest }, this.random);
     const applied: string[] = [];
+    const firedRuleIds: string[] = [];
+
+    // Publish one event once the exchange is over, however it ended
+    // (response sent, connection dropped, or client gone).
+    res.once('close', () => {
+      this.events.publish({
+        v: 1,
+        id: randomUUID(),
+        at: startedAt.toISOString(),
+        gardenId,
+        targetId: target.id,
+        targetName: target.name,
+        method: req.method,
+        path: rest.slice(0, MAX_EVENT_PATH_LENGTH),
+        status: res.headersSent ? res.statusCode : null,
+        completed: res.writableFinished,
+        durationMs: Math.round(performance.now() - started),
+        faults: [...applied],
+        ruleIds: firedRuleIds,
+      });
+    });
 
     if (selection.latency) {
       applied.push('latency');
+      firedRuleIds.push(selection.latency.id);
       const ms = clampLatency(selection.latency);
       if (!(await sleepUnlessClosed(ms, res))) return; // client went away
     }
 
     const terminal = selection.terminal;
+    if (terminal) firedRuleIds.push(terminal.id);
     if (terminal?.type === 'drop') {
+      applied.push('drop');
       req.socket.destroy(); // no response at all: the client sees a reset connection
       return;
     }

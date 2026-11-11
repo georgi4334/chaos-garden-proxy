@@ -13,6 +13,11 @@ export interface ProxyConfig {
   maxBodyBytes: number;
   /** Cap on how much of an upstream response is buffered for the corrupt fault. */
   maxCorruptBytes: number;
+  /** Redis for request events. Empty disables event publishing. */
+  redisUrl: string;
+  eventStream: string;
+  /** Approximate cap on stream length, so Redis memory stays bounded if ingest is down. */
+  eventStreamMaxLen: number;
 }
 
 export function loadProxyConfig(config: ConfigService): ProxyConfig {
@@ -28,5 +33,8 @@ export function loadProxyConfig(config: ConfigService): ProxyConfig {
     upstreamTimeoutMs: num('UPSTREAM_TIMEOUT_MS', 10000),
     maxBodyBytes: num('MAX_BODY_BYTES', 1_048_576),
     maxCorruptBytes: num('MAX_CORRUPT_BYTES', 5_242_880),
+    redisUrl: config.get<string>('REDIS_URL') ?? '',
+    eventStream: config.get<string>('EVENT_STREAM') ?? 'chaos:requests',
+    eventStreamMaxLen: num('EVENT_STREAM_MAXLEN', 100_000),
   };
 }
