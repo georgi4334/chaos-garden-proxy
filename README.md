@@ -36,10 +36,17 @@ cp .env.example .env             # INTERNAL_API_KEY must match the control API's
 npm run start:dev
 npm test                         # unit tests
 npm run test:e2e                 # e2e tests (stub control API + local upstream, no database needed)
-REDIS_URL=redis://localhost:6379 npm run test:e2e   # also runs the real-Redis test
+REDIS_URL=redis://localhost:6379 npm test           # also runs the real-Redis rate limiter tests
+REDIS_URL=redis://localhost:6379 npm run test:e2e   # also runs the real-Redis event and rate limit tests
 ```
 
 Run the control API (port 3000) first. Create a garden, a target and a rule through it, then call the proxy.
+
+## Rate limiting
+
+Each garden has its own limit (set in the dashboard, sent by the control API): a token bucket holding up to `burst` tokens that refills at `rps` per second. Each request takes a token; with none left the proxy answers **429** with `Retry-After` and `x-chaos-fault: rate_limited`, before any fault or upstream call. Every response carries `x-ratelimit-limit` and `x-ratelimit-remaining`.
+
+The bucket lives in Redis and is updated by one Lua script, so the refill and the take are atomic and all proxy instances share one bucket per garden. If Redis is slow (over 250 ms) or down, requests are let through (fail open) and a warning is logged. Needs `REDIS_URL`; turn it off with `RATE_LIMIT_ENABLED=false`.
 
 ## Request events
 
@@ -61,3 +68,6 @@ Publishing is fire-and-forget: if Redis is slow or down, events are dropped and 
 | `REDIS_URL` | none (events off) | Redis for request events |
 | `EVENT_STREAM` | `chaos:requests` | stream name |
 | `EVENT_STREAM_MAXLEN` | `100000` | approximate stream length cap |
+| `RATE_LIMIT_ENABLED` | `true` | per-garden rate limiting (needs `REDIS_URL`) |
+| `RATE_LIMIT_DEFAULT_RPS` | `10` | used if the control API sends no limit |
+| `RATE_LIMIT_DEFAULT_BURST` | `20` | used if the control API sends no limit |

@@ -8,7 +8,7 @@ export function configureApp(app: INestApplication) {
   app.enableCors({
     origin: '*',
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    exposedHeaders: ['x-chaos-fault'],
+    exposedHeaders: ['x-chaos-fault', 'retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining'],
     maxAge: 600,
   });
   app.enableShutdownHooks();

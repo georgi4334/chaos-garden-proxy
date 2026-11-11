@@ -11,6 +11,8 @@ export interface TargetConfig {
 
 export interface GardenConfig {
   gardenId: string;
+  /** Token bucket for this garden. Older control APIs don't send it; the proxy default applies. */
+  rateLimit?: { rps: number; burst: number };
   targets: TargetConfig[];
 }
 
