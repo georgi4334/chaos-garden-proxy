@@ -64,6 +64,10 @@ The event format is the **request-event v1 contract**, a JSON Schema owned by th
 
 Publishing is fire-and-forget: if Redis is slow or down, events are dropped and counted, and proxying is never delayed. The stream is capped (`EVENT_STREAM_MAXLEN`) so Redis memory stays bounded if the ingest service is stopped. Leave `REDIS_URL` empty to turn events off.
 
+## Go implementation
+
+`go/` holds a second implementation of this proxy in Go: same URLs, faults, contract, rate limiter (it even shares the Redis buckets) and metric names, so either can run in front of the same control API, Redis and dashboards. On one CPU core it handled about 4.7× the requests of this NestJS version with about 7× lower p99 latency and an eighth of the memory; see [go/README.md](go/README.md) for the benchmark and how to read it.
+
 ## Docker and CI
 
 - `docker build -t chaos-garden-proxy .` builds a two-stage image (`node:22-bookworm-slim`, production dependencies only, runs as `node`, with a health check). To run the whole system in containers, see `infra/compose.stack.yml` in the Chaos-Garden repo.
