@@ -1,4 +1,6 @@
 import { BadGatewayException, Inject, Injectable } from '@nestjs/common';
+import { configLookups } from '../observability/proxy-metrics.js';
+import { currentRequestId, REQUEST_ID_HEADER } from '../observability/request-context.js';
 import { PROXY_CONFIG, type ProxyConfig } from './proxy-config.js';
 import type { Rule } from '../matching/select-faults.js';
 
@@ -11,6 +13,8 @@ export interface TargetConfig {
 
 export interface GardenConfig {
   gardenId: string;
+  /** Token bucket for this garden. Older control APIs don't send it; the proxy default applies. */
+  rateLimit?: { rps: number; burst: number };
   targets: TargetConfig[];
 }
 
@@ -30,24 +34,34 @@ export class ControlApiClient {
   async getGardenConfig(gardenId: string): Promise<GardenConfig | null> {
     const now = Date.now();
     const cached = this.cache.get(gardenId);
-    if (cached && cached.expiresAt > now) return cached.value;
+    if (cached && cached.expiresAt > now) {
+      configLookups.inc({ result: 'hit' });
+      return cached.value;
+    }
 
     let response: Response;
     try {
       response = await fetch(`${this.config.controlApiUrl}/internal/gardens/${gardenId}/config`, {
-        headers: { 'x-internal-key': this.config.internalApiKey },
+        headers: {
+          'x-internal-key': this.config.internalApiKey,
+          [REQUEST_ID_HEADER]: currentRequestId() ?? '',
+        },
         signal: AbortSignal.timeout(5000),
       });
     } catch {
+      configLookups.inc({ result: 'error' });
       throw new BadGatewayException('Control API unreachable');
     }
 
     let value: GardenConfig | null;
     if (response.status === 404) {
+      configLookups.inc({ result: 'not_found' });
       value = null;
     } else if (response.ok) {
+      configLookups.inc({ result: 'fetched' });
       value = (await response.json()) as GardenConfig;
     } else {
+      configLookups.inc({ result: 'error' });
       throw new BadGatewayException(`Control API returned ${response.status}`);
     }
 

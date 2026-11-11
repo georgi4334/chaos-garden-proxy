@@ -6,17 +6,36 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 import type { GardenConfig } from '../src/config/control-api.client.js';
+import type { RequestEventV1 } from '../src/events/request-event.js';
+import { RequestEventPublisher } from '../src/events/request-event.publisher.js';
+import { contractProblems } from './contract.js';
 import type { Rule } from '../src/matching/select-faults.js';
 
 const KEY = 'e2e-internal-key';
 const GARDEN = '11111111-1111-4111-8111-111111111111';
 const PRIVATE_GARDEN = '22222222-2222-4222-8222-222222222222';
+// Target ids are UUIDs, as the control API issues them (the event contract requires it).
+const TARGET_ID = '44444444-4444-4444-8444-444444444444';
+const PRIVATE_TARGET_ID = '55555555-5555-4555-8555-555555555555';
 
 let upstream: http.Server;
 let controlApi: http.Server;
 let upstreamPort: number;
 let rules: Rule[] = [];
 let controlApiHits = 0;
+let lastControlRequestId: string | undefined;
+/** Events the proxy publishes, captured by a fake publisher. */
+const events: RequestEventV1[] = [];
+/** Every event published during this file, for the contract check at the end. */
+const allEvents: RequestEventV1[] = [];
+
+async function waitFor(check: () => boolean, timeoutMs = 2000) {
+  const start = Date.now();
+  while (!check()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor timed out');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
 
 const rule = (over: Partial<Rule> & Pick<Rule, 'id' | 'type'>): Rule => ({
   method: '*',
@@ -30,15 +49,36 @@ function listen(server: http.Server): Promise<number> {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port)));
 }
 
+/** Value of the first sample of `name` whose labels include all of `labels` (label order doesn't matter). */
+function metricValue(text: string, name: string, labels: Record<string, string>): number {
+  for (const line of text.split('\n')) {
+    const m = line.match(/^([a-zA-Z_:][\w:]*)\{(.*)\} (\S+)$/);
+    if (!m || m[1] !== name) continue;
+    const found = Object.fromEntries([...m[2].matchAll(/(\w+)="((?:[^"\\]|\\.)*)"/g)].map((x) => [x[1], x[2]]));
+    if (Object.entries(labels).every(([k, v]) => found[k] === v)) return Number(m[3]);
+  }
+  return Number.NaN;
+}
+
 async function startApp(env: Record<string, string>, controlPort: number): Promise<INestApplication> {
   Object.assign(process.env, {
     CONTROL_API_URL: `http://127.0.0.1:${controlPort}`,
     INTERNAL_API_KEY: KEY,
     CONFIG_CACHE_TTL_MS: '0',
     UPSTREAM_TIMEOUT_MS: '2000',
+    // This suite is about faults; rate limiting has its own suite (rate-limit.e2e-spec.ts).
+    RATE_LIMIT_ENABLED: 'false',
     ...env,
   });
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(RequestEventPublisher)
+    .useValue({
+      publish: (event: RequestEventV1) => {
+        events.push(event);
+        allEvents.push(event);
+      },
+    })
+    .compile();
   const app = moduleRef.createNestApplication({ bodyParser: false });
   configureApp(app);
   await app.init();
@@ -58,6 +98,7 @@ beforeAll(async () => {
           method: req.method,
           url: req.url,
           host: req.headers.host,
+          requestId: req.headers['x-request-id'],
           body: Buffer.concat(chunks).toString(),
           big: 'x'.repeat(200),
         }),
@@ -69,6 +110,7 @@ beforeAll(async () => {
   // A stub control API that requires the internal key.
   controlApi = http.createServer((req, res) => {
     controlApiHits++;
+    lastControlRequestId = req.headers['x-request-id'] as string | undefined;
     const m = /^\/internal\/gardens\/([^/]+)\/config$/.exec(req.url ?? '');
     if (req.headers['x-internal-key'] !== KEY) {
       res.statusCode = 401;
@@ -79,12 +121,12 @@ beforeAll(async () => {
     if (gardenId === GARDEN) {
       body = {
         gardenId,
-        targets: [{ id: 't1', name: 'api', baseUrl: `http://127.0.0.1:${upstreamPort}/v1`, rules }],
+        targets: [{ id: TARGET_ID, name: 'api', baseUrl: `http://127.0.0.1:${upstreamPort}/v1`, rules }],
       };
     } else if (gardenId === PRIVATE_GARDEN) {
       body = {
         gardenId,
-        targets: [{ id: 't2', name: 'internal', baseUrl: `http://127.0.0.1:${upstreamPort}`, rules: [] }],
+        targets: [{ id: PRIVATE_TARGET_ID, name: 'internal', baseUrl: `http://127.0.0.1:${upstreamPort}`, rules: [] }],
       };
     }
     if (!body) {
@@ -154,6 +196,91 @@ describe('Fault proxy (e2e), private targets allowed', () => {
     const res = await http$().get(`/g/${GARDEN}/api/x`).set('Origin', 'http://my-app.test').expect(503);
     expect(res.headers['access-control-allow-origin']).toBe('*');
     expect(res.headers['access-control-expose-headers']).toMatch(/x-chaos-fault/i);
+  });
+
+  it('publishes one event per proxied request, describing what happened', async () => {
+    events.length = 0;
+    await http$().get(`/g/${GARDEN}/api/users/7?secret=abc`).expect(200);
+
+    rules = [rule({ id: 'e1', type: 'error', params: { status: 503 } })];
+    await http$().post(`/g/${GARDEN}/api/orders`).expect(503);
+
+    rules = [rule({ id: 'l1', type: 'latency', params: { ms: 50 } }), rule({ id: 'd1', type: 'drop' })];
+    await http$().get(`/g/${GARDEN}/api/x`).catch(() => undefined); // connection is dropped
+
+    await http$().get(`/g/33333333-3333-4333-8333-333333333333/api/x`).expect(404); // unknown garden
+    await waitFor(() => events.length >= 3);
+    await new Promise((r) => setTimeout(r, 50)); // give any stray 4th event a chance to appear
+    expect(events).toHaveLength(3);
+
+    const [pass, error, drop] = events;
+    expect(pass).toMatchObject({
+      v: 1,
+      gardenId: GARDEN,
+      targetId: TARGET_ID,
+      targetName: 'api',
+      method: 'GET',
+      path: '/users/7', // query string is never logged
+      status: 200,
+      completed: true,
+      faults: [],
+      ruleIds: [],
+    });
+    expect(pass.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(Number.isNaN(Date.parse(pass.at))).toBe(false);
+    expect(pass.durationMs).toBeGreaterThanOrEqual(0);
+
+    expect(error).toMatchObject({ method: 'POST', path: '/orders', status: 503, faults: ['error'], ruleIds: ['e1'] });
+    expect(drop).toMatchObject({ status: null, completed: false, faults: ['latency', 'drop'], ruleIds: ['l1', 'd1'] });
+    expect(drop.durationMs).toBeGreaterThanOrEqual(45);
+    expect(new Set(events.map((e) => e.id)).size).toBe(3);
+  });
+
+  it('gives every request an id, keeps a valid incoming one, and passes it to every hop', async () => {
+    events.length = 0;
+    const generated = await http$().get(`/g/${GARDEN}/api/a`).expect(200);
+    expect(generated.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+
+    const res = await http$().get(`/g/${GARDEN}/api/b`).set('x-request-id', 'trace-from-the-browser-1').expect(200);
+    expect(res.headers['x-request-id']).toBe('trace-from-the-browser-1');
+    expect(res.body.requestId).toBe('trace-from-the-browser-1'); // the target sees it
+    expect(lastControlRequestId).toBe('trace-from-the-browser-1'); // the control API sees it
+    await waitFor(() => events.length >= 2);
+    expect(events[1].requestId).toBe('trace-from-the-browser-1'); // and it is stored with the logged request
+
+    const unsafe = await http$().get(`/g/${GARDEN}/api/c`).set('x-request-id', 'bad id with spaces').expect(200);
+    expect(unsafe.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('exposes Prometheus metrics: HTTP by route template, proxy outcomes, config lookups', async () => {
+    rules = [rule({ id: 'e', type: 'error', params: { status: 503 } })];
+    await http$().get(`/g/${GARDEN}/api/metrics-check/1`).expect(503);
+    rules = [];
+    await http$().get(`/g/${GARDEN}/api/metrics-check/2`).expect(200);
+
+    const res = await http$().get('/metrics').expect(200);
+    expect(res.headers['content-type']).toMatch(/text\/plain/);
+    const text = res.text;
+    expect(metricValue(text, 'chaos_proxy_requests_total', { outcome: 'error', service: 'proxy' })).toBeGreaterThan(0);
+    expect(metricValue(text, 'chaos_proxy_requests_total', { outcome: 'ok', service: 'proxy' })).toBeGreaterThan(0);
+    // route is the template, never the raw path (bounded label values)
+    expect(
+      metricValue(text, 'http_server_requests_seconds_count', {
+        method: 'GET',
+        route: '/g/:gardenId/:targetName/*path',
+        status_code: '503',
+      }),
+    ).toBeGreaterThan(0);
+    expect(text).not.toContain('metrics-check');
+    expect(metricValue(text, 'chaos_proxy_config_lookups_total', { result: 'fetched' })).toBeGreaterThan(0);
+    expect(metricValue(text, 'chaos_proxy_upstream_seconds_count', { result: 'response' })).toBeGreaterThan(0);
+    expect(text).toContain('process_cpu_user_seconds_total');
+  });
+
+  it('every event published so far matches the request-event contract (strictly)', () => {
+    expect(allEvents.length).toBeGreaterThan(5);
+    const problems = allEvents.flatMap((e) => contractProblems(e).map((p) => `${e.faults.join('+') || 'passthrough'}: ${p}`));
+    expect(problems).toEqual([]);
   });
 
   it('returns 404 for unknown gardens, targets and malformed ids', async () => {

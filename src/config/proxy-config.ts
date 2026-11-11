@@ -13,6 +13,15 @@ export interface ProxyConfig {
   maxBodyBytes: number;
   /** Cap on how much of an upstream response is buffered for the corrupt fault. */
   maxCorruptBytes: number;
+  /** Redis for request events. Empty disables event publishing. */
+  redisUrl: string;
+  eventStream: string;
+  /** Approximate cap on stream length, so Redis memory stays bounded if ingest is down. */
+  eventStreamMaxLen: number;
+  /** Per-garden rate limiting (needs Redis). The garden's own limit comes from the control API. */
+  rateLimitEnabled: boolean;
+  /** Used when the control API does not send a limit for a garden. */
+  defaultRateLimit: { rps: number; burst: number };
 }
 
 export function loadProxyConfig(config: ConfigService): ProxyConfig {
@@ -28,5 +37,10 @@ export function loadProxyConfig(config: ConfigService): ProxyConfig {
     upstreamTimeoutMs: num('UPSTREAM_TIMEOUT_MS', 10000),
     maxBodyBytes: num('MAX_BODY_BYTES', 1_048_576),
     maxCorruptBytes: num('MAX_CORRUPT_BYTES', 5_242_880),
+    redisUrl: config.get<string>('REDIS_URL') ?? '',
+    eventStream: config.get<string>('EVENT_STREAM') ?? 'chaos:requests',
+    eventStreamMaxLen: num('EVENT_STREAM_MAXLEN', 100_000),
+    rateLimitEnabled: config.get<string>('RATE_LIMIT_ENABLED') !== 'false',
+    defaultRateLimit: { rps: num('RATE_LIMIT_DEFAULT_RPS', 10) || 10, burst: num('RATE_LIMIT_DEFAULT_BURST', 20) || 20 },
   };
 }

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/georgi4334/Chaos-Garden/contracts/request-event.v1.schema.json",
+  "title": "Chaos Garden request event, version 1",
+  "description": "One proxied request. Published by chaos-garden-proxy to the Redis Stream (field `data`, JSON), consumed by the ingest service. Version 1 may only gain new optional properties; consumers must ignore properties they don't know.",
+  "type": "object",
+  "required": ["v", "id", "at", "gardenId", "targetId", "targetName", "method", "path", "status", "completed", "durationMs", "faults", "ruleIds"],
+  "properties": {
+    "v": { "const": 1, "description": "Contract version." },
+    "id": { "$ref": "#/$defs/uuid", "description": "Unique per request; consumers use it to ignore duplicates." },
+    "at": { "type": "string", "format": "date-time", "description": "When the request arrived (ISO 8601)." },
+    "gardenId": { "$ref": "#/$defs/uuid" },
+    "targetId": { "$ref": "#/$defs/uuid" },
+    "targetName": { "type": "string" },
+    "method": { "type": "string", "description": "HTTP method, e.g. GET." },
+    "path": { "type": "string", "description": "Path on the target, without the query string." },
+    "status": {
+      "description": "Status sent to the client, or null when no response was sent.",
+      "oneOf": [{ "type": "integer", "minimum": 100, "maximum": 599 }, { "type": "null" }]
+    },
+    "completed": { "type": "boolean", "description": "False when the connection closed before the response finished." },
+    "durationMs": { "type": "number", "minimum": 0 },
+    "faults": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Faults applied, in order. Known values: latency, error, drop, corrupt, rate_limited. Consumers must tolerate unknown values."
+    },
+    "ruleIds": { "type": "array", "items": { "type": "string" }, "description": "Ids of the rules that fired." },
+    "requestId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+      "description": "The request's x-request-id. Optional (added after the first release of v1)."
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    }
+  }
+}
