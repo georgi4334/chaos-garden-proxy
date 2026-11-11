@@ -36,9 +36,16 @@ cp .env.example .env             # INTERNAL_API_KEY must match the control API's
 npm run start:dev
 npm test                         # unit tests
 npm run test:e2e                 # e2e tests (stub control API + local upstream, no database needed)
+REDIS_URL=redis://localhost:6379 npm run test:e2e   # also runs the real-Redis test
 ```
 
 Run the control API (port 3000) first. Create a garden, a target and a rule through it, then call the proxy.
+
+## Request events
+
+After each proxied request the proxy appends one event to a Redis Stream (`chaos:requests` by default), which the ingest service reads to build request logs and stats. An event holds the garden, target, method, path (without the query string, which can carry secrets), status, duration, the faults applied and the rule ids that fired. Requests to unknown gardens or targets are not logged.
+
+Publishing is fire-and-forget: if Redis is slow or down, events are dropped and counted, and proxying is never delayed. The stream is capped (`EVENT_STREAM_MAXLEN`) so Redis memory stays bounded if the ingest service is stopped. Leave `REDIS_URL` empty to turn events off.
 
 ## Configuration
 
@@ -51,3 +58,6 @@ Run the control API (port 3000) first. Create a garden, a target and a rule thro
 | `CONFIG_CACHE_TTL_MS` | `5000` | how long a garden's config is cached (0 = off) |
 | `UPSTREAM_TIMEOUT_MS` | `10000` | max wait for the target |
 | `MAX_BODY_BYTES` | `1048576` | max request body size |
+| `REDIS_URL` | none (events off) | Redis for request events |
+| `EVENT_STREAM` | `chaos:requests` | stream name |
+| `EVENT_STREAM_MAXLEN` | `100000` | approximate stream length cap |

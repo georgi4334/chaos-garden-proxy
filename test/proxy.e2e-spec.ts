@@ -6,6 +6,8 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 import type { GardenConfig } from '../src/config/control-api.client.js';
+import type { RequestEventV1 } from '../src/events/request-event.js';
+import { RequestEventPublisher } from '../src/events/request-event.publisher.js';
 import type { Rule } from '../src/matching/select-faults.js';
 
 const KEY = 'e2e-internal-key';
@@ -17,6 +19,16 @@ let controlApi: http.Server;
 let upstreamPort: number;
 let rules: Rule[] = [];
 let controlApiHits = 0;
+/** Events the proxy publishes, captured by a fake publisher. */
+const events: RequestEventV1[] = [];
+
+async function waitFor(check: () => boolean, timeoutMs = 2000) {
+  const start = Date.now();
+  while (!check()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor timed out');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
 
 const rule = (over: Partial<Rule> & Pick<Rule, 'id' | 'type'>): Rule => ({
   method: '*',
@@ -38,7 +50,10 @@ async function startApp(env: Record<string, string>, controlPort: number): Promi
     UPSTREAM_TIMEOUT_MS: '2000',
     ...env,
   });
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(RequestEventPublisher)
+    .useValue({ publish: (event: RequestEventV1) => events.push(event) })
+    .compile();
   const app = moduleRef.createNestApplication({ bodyParser: false });
   configureApp(app);
   await app.init();
@@ -154,6 +169,44 @@ describe('Fault proxy (e2e), private targets allowed', () => {
     const res = await http$().get(`/g/${GARDEN}/api/x`).set('Origin', 'http://my-app.test').expect(503);
     expect(res.headers['access-control-allow-origin']).toBe('*');
     expect(res.headers['access-control-expose-headers']).toMatch(/x-chaos-fault/i);
+  });
+
+  it('publishes one event per proxied request, describing what happened', async () => {
+    events.length = 0;
+    await http$().get(`/g/${GARDEN}/api/users/7?secret=abc`).expect(200);
+
+    rules = [rule({ id: 'e1', type: 'error', params: { status: 503 } })];
+    await http$().post(`/g/${GARDEN}/api/orders`).expect(503);
+
+    rules = [rule({ id: 'l1', type: 'latency', params: { ms: 50 } }), rule({ id: 'd1', type: 'drop' })];
+    await http$().get(`/g/${GARDEN}/api/x`).catch(() => undefined); // connection is dropped
+
+    await http$().get(`/g/33333333-3333-4333-8333-333333333333/api/x`).expect(404); // unknown garden
+    await waitFor(() => events.length >= 3);
+    await new Promise((r) => setTimeout(r, 50)); // give any stray 4th event a chance to appear
+    expect(events).toHaveLength(3);
+
+    const [pass, error, drop] = events;
+    expect(pass).toMatchObject({
+      v: 1,
+      gardenId: GARDEN,
+      targetId: 't1',
+      targetName: 'api',
+      method: 'GET',
+      path: '/users/7', // query string is never logged
+      status: 200,
+      completed: true,
+      faults: [],
+      ruleIds: [],
+    });
+    expect(pass.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(Number.isNaN(Date.parse(pass.at))).toBe(false);
+    expect(pass.durationMs).toBeGreaterThanOrEqual(0);
+
+    expect(error).toMatchObject({ method: 'POST', path: '/orders', status: 503, faults: ['error'], ruleIds: ['e1'] });
+    expect(drop).toMatchObject({ status: null, completed: false, faults: ['latency', 'drop'], ruleIds: ['l1', 'd1'] });
+    expect(drop.durationMs).toBeGreaterThanOrEqual(45);
+    expect(new Set(events.map((e) => e.id)).size).toBe(3);
   });
 
   it('returns 404 for unknown gardens, targets and malformed ids', async () => {
